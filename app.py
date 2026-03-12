@@ -416,58 +416,113 @@ with tab1:
 
 # ── タブ2: カメラ ─────────────────────────────────────
 with tab2:
-    # カメラを背面カメラ・全画面表示にするCSS＋JS
-    st.markdown("""
+    # HTML5ネイティブカメラ（背面・大画面）＋ Streamlitへ画像を渡す
+    st.components.v1.html("""
     <style>
-    /* カメラ枠を全画面サイズに */
-    [data-testid="stCameraInput"] video,
-    [data-testid="stCameraInputVideo"] {
-        width: 100vw !important;
-        max-width: 100% !important;
-        height: 70vh !important;
-        object-fit: cover !important;
-        border-radius: 12px !important;
-    }
-    [data-testid="stCameraInput"] > div {
-        width: 100% !important;
-    }
-    /* Take Photoボタンを大きく */
-    [data-testid="stCameraInput"] button {
-        width: 100% !important;
-        font-size: 1.3rem !important;
-        padding: 1rem !important;
-        margin-top: 0.5rem !important;
-        background: #12121A !important;
-        color: #00E676 !important;
-        border: 2px solid #00E676 !important;
-        border-radius: 12px !important;
-        font-weight: 700 !important;
-    }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { background: #0A0A0F; }
+      #wrapper {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 0;
+      }
+      video {
+        width: 100%;
+        max-height: 62vh;
+        object-fit: cover;
+        border-radius: 14px;
+        border: 2px solid #2A2A3A;
+        background: #000;
+        display: block;
+      }
+      canvas { display: none; }
+      #snapBtn {
+        width: 100%;
+        padding: 18px;
+        font-size: 1.3rem;
+        font-weight: 800;
+        background: #12121A;
+        color: #00E676;
+        border: 2px solid #00E676;
+        border-radius: 14px;
+        cursor: pointer;
+        font-family: 'Noto Sans JP', sans-serif;
+        letter-spacing: 1px;
+      }
+      #snapBtn:active { background: #00E676; color: #0A0A0F; }
+      #msg {
+        color: #6B6B85;
+        font-size: 0.82rem;
+        text-align: center;
+        font-family: sans-serif;
+      }
     </style>
+    <div id="wrapper">
+      <video id="video" autoplay playsinline></video>
+      <canvas id="canvas"></canvas>
+      <button id="snapBtn">📸 撮影する</button>
+      <div id="msg">背面カメラで信号機を撮影してください</div>
+    </div>
     <script>
-    // 背面カメラ（environment）に切り替える
-    function switchToRearCamera() {
-        const videos = document.querySelectorAll('video');
-        videos.forEach(video => {
-            if (video.srcObject) return; // すでに設定済みならスキップ
-            navigator.mediaDevices.getUserMedia({
-                video: { facingMode: { exact: "environment" } }
-            }).then(stream => {
-                video.srcObject = stream;
-            }).catch(() => {
-                // 背面カメラが使えない場合はデフォルトにフォールバック
-                navigator.mediaDevices.getUserMedia({ video: true })
-                    .then(stream => { video.srcObject = stream; });
-            });
-        });
-    }
-    // DOM描画後に実行
-    setTimeout(switchToRearCamera, 800);
-    setTimeout(switchToRearCamera, 2000);
+      const video   = document.getElementById('video');
+      const canvas  = document.getElementById('canvas');
+      const snapBtn = document.getElementById('snapBtn');
+      const msg     = document.getElementById('msg');
+
+      // 背面カメラで起動
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+      }).then(stream => {
+        video.srcObject = stream;
+        msg.textContent = '📷 背面カメラ起動中';
+      }).catch(err => {
+        msg.textContent = '⚠️ カメラを起動できませんでした: ' + err.message;
+      });
+
+      // 撮影 → Base64 → Streamlit に送信
+      snapBtn.addEventListener('click', () => {
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        // Streamlit の parent frame に postMessage で送る
+        window.parent.postMessage({ type: 'camera_snap', image: dataUrl }, '*');
+        msg.textContent = '✅ 送信しました！少々お待ちください…';
+        setTimeout(() => { msg.textContent = '📷 背面カメラ起動中'; }, 3000);
+      });
+    </script>
+    """, height=600, scrolling=False)
+
+    # postMessage を受け取るブリッジ（隠しinput経由）
+    st.markdown("""
+    <script>
+    window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'camera_snap') {
+            // hidden input に base64 を入れて Streamlit のfile_uploaderをトリガー
+            const input = window.parent.document.querySelector('input[data-testid="stFileUploaderDropzoneInput"]');
+            if (input) {
+                const arr = e.data.image.split(',');
+                const mime = arr[0].match(/:(.*?);/)[1];
+                const bstr = atob(arr[1]);
+                let n = bstr.length;
+                const u8arr = new Uint8Array(n);
+                while(n--) { u8arr[n] = bstr.charCodeAt(n); }
+                const file = new File([u8arr], 'camera.jpg', {type: mime});
+                const dt = new DataTransfer();
+                dt.items.add(file);
+                input.files = dt.files;
+                input.dispatchEvent(new Event('change', {bubbles: true}));
+            }
+        }
+    });
     </script>
     """, unsafe_allow_html=True)
 
-    camera_img = st.camera_input("📷 信号機を撮影してください", label_visibility="visible")
+    st.markdown("<div style='color:#6B6B85;font-size:0.82rem;text-align:center;margin-top:-8px'>↓ または画像ファイルを直接アップロード</div>", unsafe_allow_html=True)
+    camera_img = st.file_uploader("カメラ画像", type=["jpg","jpeg","png"], label_visibility="collapsed", key="cam_upload")
 
     if camera_img:
         file_bytes = np.asarray(bytearray(camera_img.read()), dtype=np.uint8)
@@ -490,12 +545,17 @@ with tab2:
 
         if result["confidence_yolo"] > 0:
             yc = int(result["confidence_yolo"] * 100)
+            cc = int(result["confidence_color"] * 100)
+            col_map = {"red":"#FF3B3B","yellow":"#FFD600","green":"#00E676"}
+            bar_color = col_map.get(color, "#6B6B85")
             st.markdown(f"""
             <div class="conf-bar-wrap">
-                <div class="conf-label">検出信頼度: {yc}%</div>
-                <div class="conf-bar">
-                    <div class="conf-fill" style="width:{yc}%;background:#00E676"></div>
-                </div>
+                <div class="conf-label">YOLO検出信頼度: {yc}%</div>
+                <div class="conf-bar"><div class="conf-fill" style="width:{yc}%;background:{bar_color}"></div></div>
+            </div>
+            <div class="conf-bar-wrap" style="margin-top:8px">
+                <div class="conf-label">色判別信頼度: {cc}%</div>
+                <div class="conf-bar"><div class="conf-fill" style="width:{cc}%;background:{bar_color}"></div></div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -540,4 +600,3 @@ st.markdown("""
     視覚障害者支援ツール | Built with YOLOv11 + OpenCV + Streamlit
 </div>
 """, unsafe_allow_html=True)
-
