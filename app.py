@@ -366,6 +366,13 @@ with tab1:
         file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
         img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
+        # 短辺が1280px未満なら拡大してYOLOに渡す（検出精度向上）
+        h, w = img_bgr.shape[:2]
+        min_side = min(h, w)
+        if min_side < 1280:
+            scale   = 1280 / min_side
+            img_bgr = cv2.resize(img_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LINEAR)
+
         with st.spinner("🔍 検出中…"):
             result = run_detection(img_bgr, model)
 
@@ -480,6 +487,15 @@ with tab2:
         file_bytes = np.asarray(bytearray(camera_img.read()), dtype=np.uint8)
         img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
+        # 短辺が1280px未満なら拡大してYOLOに渡す（検出精度向上）
+        h, w = img_bgr.shape[:2]
+        min_side = min(h, w)
+        if min_side < 1280:
+            scale   = 1280 / min_side
+            new_w   = int(w * scale)
+            new_h   = int(h * scale)
+            img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
         with st.spinner("🔍 検出中…"):
             result = run_detection(img_bgr, model)
 
@@ -553,3 +569,4 @@ st.markdown("""
     視覚障害者支援ツール | Built with YOLOv11 + OpenCV + Streamlit
 </div>
 """, unsafe_allow_html=True)
+
