@@ -174,9 +174,8 @@ def load_yolo_model():
         if model_path.exists():
             model = YOLO(str(model_path))
         else:
-            # 事前学習済みyolo11n をベースに使用
+            # カスタムモデルがなければ yolo11n.pt（COCO汎用）で動作
             model = YOLO("yolo11n.pt")
-            st.warning("⚠️ カスタムモデルが見つかりません。デモ用にyolo11n.ptを使用しています。")
         return model
     except ImportError:
         st.error("ultralytics がインストールされていません。requirements.txt を確認してください。")
@@ -401,10 +400,10 @@ with tab1:
         # 音声読み上げ
         st.components.v1.html(tts_html(voice_msg), height=0)
 
-        # アノテーション済み画像
-        with st.expander("🖼️ 検出結果画像を表示"):
-            annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
-            st.image(annotated_rgb, use_container_width=True)
+        # バウンディングボックス付き画像を常時表示
+        st.markdown("<div style='color:#6B6B85;font-size:0.82rem;margin:0.8rem 0 0.3rem'>🖼️ 検出結果</div>", unsafe_allow_html=True)
+        annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
+        st.image(annotated_rgb, use_container_width=True)
 
     else:
         st.markdown("""
@@ -512,9 +511,10 @@ with tab2:
             </div>
             """, unsafe_allow_html=True)
 
-        with st.expander("🖼️ 検出結果画像を表示"):
-            annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
-            st.image(annotated_rgb, use_container_width=True)
+        # バウンディングボックス付き画像を常時表示
+        st.markdown("<div style='color:#6B6B85;font-size:0.82rem;margin:0.8rem 0 0.3rem'>🖼️ 検出結果</div>", unsafe_allow_html=True)
+        annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
+        st.image(annotated_rgb, use_container_width=True)
 
 # ── タブ3: 使い方 ──────────────────────────────────────
 with tab3:
