@@ -416,113 +416,66 @@ with tab1:
 
 # ── タブ2: カメラ ─────────────────────────────────────
 with tab2:
-    # HTML5ネイティブカメラ（背面・大画面）＋ Streamlitへ画像を渡す
-    st.components.v1.html("""
-    <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
-      body { background: #0A0A0F; }
-      #wrapper {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 0;
-      }
-      video {
-        width: 100%;
-        max-height: 62vh;
-        object-fit: cover;
-        border-radius: 14px;
-        border: 2px solid #2A2A3A;
-        background: #000;
-        display: block;
-      }
-      canvas { display: none; }
-      #snapBtn {
-        width: 100%;
-        padding: 18px;
-        font-size: 1.3rem;
-        font-weight: 800;
-        background: #12121A;
-        color: #00E676;
-        border: 2px solid #00E676;
-        border-radius: 14px;
-        cursor: pointer;
-        font-family: 'Noto Sans JP', sans-serif;
-        letter-spacing: 1px;
-      }
-      #snapBtn:active { background: #00E676; color: #0A0A0F; }
-      #msg {
-        color: #6B6B85;
-        font-size: 0.82rem;
-        text-align: center;
-        font-family: sans-serif;
-      }
-    </style>
-    <div id="wrapper">
-      <video id="video" autoplay playsinline></video>
-      <canvas id="canvas"></canvas>
-      <button id="snapBtn">📸 撮影する</button>
-      <div id="msg">背面カメラで信号機を撮影してください</div>
-    </div>
-    <script>
-      const video   = document.getElementById('video');
-      const canvas  = document.getElementById('canvas');
-      const snapBtn = document.getElementById('snapBtn');
-      const msg     = document.getElementById('msg');
-
-      // 背面カメラで起動
-      navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-      }).then(stream => {
-        video.srcObject = stream;
-        msg.textContent = '📷 背面カメラ起動中';
-      }).catch(err => {
-        msg.textContent = '⚠️ カメラを起動できませんでした: ' + err.message;
-      });
-
-      // 撮影 → Base64 → Streamlit に送信
-      snapBtn.addEventListener('click', () => {
-        canvas.width  = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d').drawImage(video, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-        // Streamlit の parent frame に postMessage で送る
-        window.parent.postMessage({ type: 'camera_snap', image: dataUrl }, '*');
-        msg.textContent = '✅ 送信しました！少々お待ちください…';
-        setTimeout(() => { msg.textContent = '📷 背面カメラ起動中'; }, 3000);
-      });
-    </script>
-    """, height=600, scrolling=False)
-
-    # postMessage を受け取るブリッジ（隠しinput経由）
+    # st.camera_input を大きく見せるCSS（機能はそのまま使う）
     st.markdown("""
+    <style>
+    /* カメラ映像エリアを大きく */
+    section[data-testid="stMain"] [data-testid="stCameraInput"] {
+        width: 100% !important;
+    }
+    section[data-testid="stMain"] [data-testid="stCameraInput"] > div:first-child {
+        width: 100% !important;
+        aspect-ratio: 4/3 !important;
+        max-height: 65vh !important;
+    }
+    section[data-testid="stMain"] [data-testid="stCameraInput"] video {
+        width: 100% !important;
+        height: 100% !important;
+        max-height: 65vh !important;
+        object-fit: cover !important;
+        border-radius: 14px !important;
+        border: 2px solid #2A2A3A !important;
+    }
+    /* 撮影ボタンを大きく */
+    section[data-testid="stMain"] [data-testid="stCameraInput"] button {
+        width: 100% !important;
+        padding: 16px !important;
+        font-size: 1.2rem !important;
+        font-weight: 800 !important;
+        background: #12121A !important;
+        color: #00E676 !important;
+        border: 2px solid #00E676 !important;
+        border-radius: 14px !important;
+        margin-top: 8px !important;
+    }
+    section[data-testid="stMain"] [data-testid="stCameraInput"] button:active {
+        background: #00E676 !important;
+        color: #0A0A0F !important;
+    }
+    </style>
+    <!-- 背面カメラに切り替えるJS：Streamlitのvideoタグを直接書き換え -->
     <script>
-    window.addEventListener('message', function(e) {
-        if (e.data && e.data.type === 'camera_snap') {
-            // hidden input に base64 を入れて Streamlit のfile_uploaderをトリガー
-            const input = window.parent.document.querySelector('input[data-testid="stFileUploaderDropzoneInput"]');
-            if (input) {
-                const arr = e.data.image.split(',');
-                const mime = arr[0].match(/:(.*?);/)[1];
-                const bstr = atob(arr[1]);
-                let n = bstr.length;
-                const u8arr = new Uint8Array(n);
-                while(n--) { u8arr[n] = bstr.charCodeAt(n); }
-                const file = new File([u8arr], 'camera.jpg', {type: mime});
-                const dt = new DataTransfer();
-                dt.items.add(file);
-                input.files = dt.files;
-                input.dispatchEvent(new Event('change', {bubbles: true}));
-            }
-        }
-    });
+    function forceRearCamera() {
+        const videos = window.parent.document.querySelectorAll('video');
+        videos.forEach(v => {
+            const track = v.srcObject && v.srcObject.getVideoTracks()[0];
+            if (!track) return;
+            const settings = track.getSettings();
+            if (settings.facingMode === 'environment') return; // すでに背面
+            track.stop();
+            navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }
+            }).then(stream => {
+                v.srcObject = stream;
+            }).catch(() => {});
+        });
+    }
+    setTimeout(forceRearCamera, 1200);
+    setTimeout(forceRearCamera, 2500);
     </script>
     """, unsafe_allow_html=True)
 
-    st.markdown("<div style='color:#6B6B85;font-size:0.82rem;text-align:center;margin-top:-8px'>↓ または画像ファイルを直接アップロード</div>", unsafe_allow_html=True)
-    camera_img = st.file_uploader("カメラ画像", type=["jpg","jpeg","png"], label_visibility="collapsed", key="cam_upload")
+    camera_img = st.camera_input("📷 信号機を撮影", label_visibility="collapsed")
 
     if camera_img:
         file_bytes = np.asarray(bytearray(camera_img.read()), dtype=np.uint8)
