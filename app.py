@@ -1,251 +1,543 @@
+"""
+視覚障害者向け信号機判別ウェブアプリ
+Traffic Signal Detection App for Visually Impaired
+Using YOLOv11 + OpenCV + Streamlit
+"""
+
 import streamlit as st
 import cv2
 import numpy as np
-from ultralytics import YOLO
 from PIL import Image
-import streamlit.components.v1 as components
+import io
+import time
+import base64
+from pathlib import Path
+import tempfile
+import os
 
-def speak(text):
-    """Web Speech APIで日本語音声読み上げ"""
-    components.html(f"""
-        <script>
-        (function() {{
-            window.speechSynthesis.cancel();
-            var msg = new SpeechSynthesisUtterance({text!r});
-            msg.lang = 'ja-JP';
-            msg.rate = 0.9;
-            msg.pitch = 1.0;
-            msg.volume = 1.0;
-            window.speechSynthesis.speak(msg);
-        }})();
-        </script>
-    """, height=0)
+# ページ設定
+st.set_page_config(
+    page_title="信号機判別アプリ | Traffic Signal Detector",
+    page_icon="🚦",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-# --- ページ設定 ---
-st.set_page_config(page_title="信号機判別アシスタント", page_icon="🚦", layout="wide")
-
-# スタイル調整（視覚障害者向け：大きなフォント・高コントラスト・シンプルなレイアウト）
+# ─── PWA対応 (スマートフォンでホーム画面に追加可能) ─────────
 st.markdown("""
+<link rel="manifest" href="/app/static/manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="信号判別">
+<meta name="theme-color" content="#0A0A0F">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="apple-touch-icon" href="/app/static/icon-192.png">
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/app/static/sw.js');
+  }
+</script>
+""", unsafe_allow_html=True)
+
+# ─── カスタムCSS ───────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Space+Grotesk:wght@400;600;700&display=swap');
+
+:root {
+    --red:    #FF3B3B;
+    --yellow: #FFD600;
+    --green:  #00E676;
+    --bg:     #0A0A0F;
+    --card:   #12121A;
+    --border: #2A2A3A;
+    --text:   #E8E8F0;
+    --muted:  #6B6B85;
+}
+
+html, body, [data-testid="stAppViewContainer"] {
+    background: var(--bg) !important;
+    color: var(--text) !important;
+    font-family: 'Noto Sans JP', sans-serif;
+}
+
+[data-testid="stHeader"] { background: transparent !important; }
+
+.hero {
+    text-align: center;
+    padding: 2rem 0 1rem;
+}
+.hero h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 2.6rem;
+    font-weight: 700;
+    letter-spacing: -1px;
+    margin: 0;
+    background: linear-gradient(135deg, #FF3B3B 0%, #FFD600 50%, #00E676 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+.hero p {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin-top: 0.5rem;
+}
+
+.signal-box {
+    border-radius: 16px;
+    padding: 2rem;
+    text-align: center;
+    font-size: 5rem;
+    margin: 1rem 0;
+    border: 2px solid var(--border);
+    background: var(--card);
+    transition: all 0.3s ease;
+}
+.signal-red    { border-color: var(--red);    box-shadow: 0 0 40px rgba(255,59,59,0.3); }
+.signal-yellow { border-color: var(--yellow); box-shadow: 0 0 40px rgba(255,214,0,0.3); }
+.signal-green  { border-color: var(--green);  box-shadow: 0 0 40px rgba(0,230,118,0.3); }
+.signal-none   { border-color: var(--border); }
+
+.label-red    { color: var(--red);    font-weight: 900; font-size: 2rem; }
+.label-yellow { color: var(--yellow); font-weight: 900; font-size: 2rem; }
+.label-green  { color: var(--green);  font-weight: 900; font-size: 2rem; }
+.label-none   { color: var(--muted);  font-weight: 700; font-size: 1.4rem; }
+
+.conf-bar-wrap { margin-top: 1rem; }
+.conf-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+.conf-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--border);
+    overflow: hidden;
+}
+.conf-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
+
+.info-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin: 0.5rem 0;
+    font-size: 0.88rem;
+    color: var(--muted);
+}
+.info-card strong { color: var(--text); }
+
+.stButton > button {
+    background: var(--card) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important;
+    font-family: 'Noto Sans JP', sans-serif !important;
+    font-weight: 700 !important;
+    padding: 0.6rem 1.4rem !important;
+    transition: all 0.2s !important;
+}
+.stButton > button:hover {
+    border-color: var(--green) !important;
+    color: var(--green) !important;
+}
+
+[data-testid="stFileUploader"] {
+    background: var(--card);
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+}
+
+.stTabs [data-baseweb="tab-list"] { gap: 8px; }
+.stTabs [data-baseweb="tab"] {
+    background: var(--card) !important;
+    border-radius: 8px !important;
+    color: var(--muted) !important;
+    border: 1px solid var(--border) !important;
+}
+.stTabs [aria-selected="true"] {
+    background: #1E1E2E !important;
+    color: var(--text) !important;
+    border-color: var(--green) !important;
+}
+
+div[data-testid="stMarkdownContainer"] p { color: var(--text); }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─── ユーティリティ関数 ───────────────────────────────────
+def load_yolo_model():
+    """YOLOv11モデルを読み込む"""
+    try:
+        from ultralytics import YOLO
+        model_path = Path("models/yolo11_traffic.pt")
+        if model_path.exists():
+            model = YOLO(str(model_path))
+        else:
+            # 事前学習済みyolo11n をベースに使用
+            model = YOLO("yolo11n.pt")
+            st.warning("⚠️ カスタムモデルが見つかりません。デモ用にyolo11n.ptを使用しています。")
+        return model
+    except ImportError:
+        st.error("ultralytics がインストールされていません。requirements.txt を確認してください。")
+        return None
+    except Exception as e:
+        st.error(f"モデル読み込みエラー: {e}")
+        return None
+
+
+def analyze_traffic_light_color(roi: np.ndarray) -> tuple[str, float]:
+    """
+    OpenCVでROI内の信号色を判別する
+    Returns: (color_label, confidence)
+    """
+    if roi is None or roi.size == 0:
+        return "unknown", 0.0
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+    # HSV範囲定義
+    red_lower1  = np.array([0,   120, 70]);  red_upper1  = np.array([10,  255, 255])
+    red_lower2  = np.array([160, 120, 70]);  red_upper2  = np.array([180, 255, 255])
+    yellow_lower = np.array([20,  100, 100]); yellow_upper = np.array([35,  255, 255])
+    green_lower  = np.array([40,  80,  80]);  green_upper  = np.array([90,  255, 255])
+
+    mask_red    = cv2.bitwise_or(
+        cv2.inRange(hsv, red_lower1, red_upper1),
+        cv2.inRange(hsv, red_lower2, red_upper2)
+    )
+    mask_yellow = cv2.inRange(hsv, yellow_lower, yellow_upper)
+    mask_green  = cv2.inRange(hsv, green_lower,  green_upper)
+
+    total = roi.shape[0] * roi.shape[1]
+    if total == 0:
+        return "unknown", 0.0
+
+    count_r = cv2.countNonZero(mask_red)
+    count_y = cv2.countNonZero(mask_yellow)
+    count_g = cv2.countNonZero(mask_green)
+
+    counts = {"red": count_r, "yellow": count_y, "green": count_g}
+    best_color = max(counts, key=counts.get)
+    best_count = counts[best_color]
+
+    if best_count / total < 0.04:
+        return "unknown", 0.0
+
+    confidence = min(best_count / total * 5, 1.0)
+    return best_color, round(confidence, 3)
+
+
+def run_detection(image_bgr: np.ndarray, model) -> dict:
+    """
+    YOLOv11で信号機を検出 → OpenCVで色判別
+    """
+    results = {
+        "color": "none",
+        "confidence_yolo": 0.0,
+        "confidence_color": 0.0,
+        "boxes": [],
+        "annotated": image_bgr.copy(),
+    }
+
+    if model is None:
+        return results
+
+    yolo_results = model(image_bgr, verbose=False)[0]
+
+    best_conf = 0.0
+    best_box  = None
+    best_color = "none"
+    best_color_conf = 0.0
+
+    for box in yolo_results.boxes:
+        cls_id = int(box.cls[0])
+        conf   = float(box.conf[0])
+        label  = model.names.get(cls_id, "")
+
+        # traffic light クラスのみ対象
+        if "traffic" not in label.lower() and "signal" not in label.lower() and cls_id != 9:
+            # COCO cls=9 は "traffic light"
+            if cls_id != 9:
+                continue
+
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        roi = image_bgr[y1:y2, x1:x2]
+        color, color_conf = analyze_traffic_light_color(roi)
+
+        results["boxes"].append({
+            "bbox": (x1, y1, x2, y2),
+            "yolo_conf": conf,
+            "color": color,
+            "color_conf": color_conf,
+        })
+
+        if conf > best_conf:
+            best_conf       = conf
+            best_box        = (x1, y1, x2, y2)
+            best_color      = color
+            best_color_conf = color_conf
+
+    results["color"]            = best_color
+    results["confidence_yolo"]  = round(best_conf, 3)
+    results["confidence_color"] = best_color_conf
+
+    # アノテーション描画
+    annotated = image_bgr.copy()
+    color_map = {
+        "red":     (0, 0, 255),
+        "yellow":  (0, 220, 255),
+        "green":   (0, 230, 100),
+        "unknown": (160, 160, 160),
+        "none":    (160, 160, 160),
+    }
+    for b in results["boxes"]:
+        x1, y1, x2, y2 = b["bbox"]
+        c = b["color"]
+        rgb = color_map.get(c, (160, 160, 160))
+        cv2.rectangle(annotated, (x1, y1), (x2, y2), rgb, 3)
+        label_text = f"{c.upper()} {b['yolo_conf']:.0%}"
+        cv2.putText(annotated, label_text,
+                    (x1, max(y1 - 10, 20)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, rgb, 2)
+
+    results["annotated"] = annotated
+    return results
+
+
+def color_to_japanese(color: str) -> tuple[str, str, str, str]:
+    """色 → (日本語, emoji, cssクラス, 音声メッセージ)"""
+    mapping = {
+        "red":     ("赤 — 止まれ",    "🔴", "signal-red",    "赤信号です。止まってください。"),
+        "yellow":  ("黄 — 注意",      "🟡", "signal-yellow", "黄信号です。注意してください。"),
+        "green":   ("青 — 進め",      "🟢", "signal-green",  "青信号です。渡れます。"),
+        "unknown": ("判別不明",        "⚪", "signal-none",   "信号の色を判別できませんでした。"),
+        "none":    ("信号機未検出",    "⚫", "signal-none",   "信号機が見つかりませんでした。"),
+    }
+    return mapping.get(color, mapping["none"])
+
+
+def tts_html(message: str) -> str:
+    """Web Speech API を使った音声読み上げHTML"""
+    safe = message.replace("'", "\\'")
+    return f"""
+    <script>
+    (function(){{
+        if (!window._tts_done_{abs(hash(message))}) {{
+            window._tts_done_{abs(hash(message))} = true;
+            var u = new SpeechSynthesisUtterance('{safe}');
+            u.lang = 'ja-JP';
+            u.rate = 0.95;
+            u.pitch = 1.1;
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(u);
+        }}
+    }})();
+    </script>
+    """
+
+
+# ─── メインUI ────────────────────────────────────────────
+st.markdown("""
+<div class="hero">
+  <h1>🚦 信号機判別アプリ</h1>
+  <p>YOLOv11 + OpenCV で信号機を検出・色判別し、音声でお知らせします</p>
+</div>
+""", unsafe_allow_html=True)
+
+# モデル読み込み（キャッシュ）
+@st.cache_resource(show_spinner="モデルを読み込み中…")
+def get_model():
+    return load_yolo_model()
+
+model = get_model()
+
+# タブ構成
+tab2, tab1, tab3 = st.tabs(["📹 カメラ撮影", "📷 画像アップロード", "ℹ️ 使い方"])
+
+# ── タブ1: 画像アップロード ────────────────────────────
+with tab1:
+    uploaded = st.file_uploader(
+        "信号機の画像をアップロード",
+        type=["jpg", "jpeg", "png", "webp"],
+        label_visibility="collapsed",
+    )
+
+    if uploaded:
+        file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
+        img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+
+        with st.spinner("🔍 検出中…"):
+            result = run_detection(img_bgr, model)
+
+        color = result["color"]
+        ja_label, emoji, css_cls, voice_msg = color_to_japanese(color)
+
+        # 結果表示
+        st.markdown(f"""
+        <div class="signal-box {css_cls}">
+            {emoji}
+            <div class="label-{color if color in ['red','yellow','green'] else 'none'}">{ja_label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 信頼度バー
+        if result["confidence_yolo"] > 0:
+            yc  = int(result["confidence_yolo"]  * 100)
+            cc  = int(result["confidence_color"] * 100)
+            col_map = {"red":"#FF3B3B","yellow":"#FFD600","green":"#00E676"}
+            bar_color = col_map.get(color, "#6B6B85")
+            st.markdown(f"""
+            <div class="conf-bar-wrap">
+                <div class="conf-label">YOLO検出信頼度: {yc}%</div>
+                <div class="conf-bar"><div class="conf-fill" style="width:{yc}%;background:{bar_color}"></div></div>
+            </div>
+            <div class="conf-bar-wrap" style="margin-top:8px">
+                <div class="conf-label">色判別信頼度: {cc}%</div>
+                <div class="conf-bar"><div class="conf-fill" style="width:{cc}%;background:{bar_color}"></div></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 音声読み上げ
+        st.components.v1.html(tts_html(voice_msg), height=0)
+
+        # アノテーション済み画像
+        with st.expander("🖼️ 検出結果画像を表示"):
+            annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
+            st.image(annotated_rgb, use_container_width=True)
+
+    else:
+        st.markdown("""
+        <div class="info-card" style="text-align:center;padding:2rem;">
+            📂 画像ファイルをアップロードしてください<br>
+            <span style="font-size:0.8rem">対応形式: JPG / PNG / WEBP</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ── タブ2: カメラ ─────────────────────────────────────
+with tab2:
+    # カメラを背面カメラ・全画面表示にするCSS＋JS
+    st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&display=swap');
-
-    html, body, [class*="css"] {
-        font-family: 'Noto Sans JP', sans-serif;
+    /* カメラ枠を全画面サイズに */
+    [data-testid="stCameraInput"] video,
+    [data-testid="stCameraInputVideo"] {
+        width: 100vw !important;
+        max-width: 100% !important;
+        height: 70vh !important;
+        object-fit: cover !important;
+        border-radius: 12px !important;
     }
-
-    /* 全体の背景を暗くして見やすく */
-    .stApp {
-        background-color: #111111;
-        color: #FFFFFF;
+    [data-testid="stCameraInput"] > div {
+        width: 100% !important;
     }
-
-    /* タイトル */
-    h1 {
-        font-size: 2.8rem !important;
-        font-weight: 900 !important;
-        color: #FFFFFF !important;
-        text-align: center;
-        padding: 0.5em 0;
-        letter-spacing: 0.05em;
-    }
-
-    /* 説明文 */
-    p, .stMarkdown p {
-        font-size: 1.4rem !important;
-        color: #DDDDDD !important;
-        text-align: center;
-        line-height: 1.8;
-    }
-
-    /* カメラ入力ラベル */
-    label {
-        font-size: 1.6rem !important;
+    /* Take Photoボタンを大きく */
+    [data-testid="stCameraInput"] button {
+        width: 100% !important;
+        font-size: 1.3rem !important;
+        padding: 1rem !important;
+        margin-top: 0.5rem !important;
+        background: #12121A !important;
+        color: #00E676 !important;
+        border: 2px solid #00E676 !important;
+        border-radius: 12px !important;
         font-weight: 700 !important;
-        color: #FFFFFF !important;
-    }
-
-    /* 結果ボックス共通 */
-    .result-box {
-        border-radius: 20px;
-        padding: 40px 30px;
-        text-align: center;
-        font-size: 3rem;
-        font-weight: 900;
-        margin: 20px 0;
-        letter-spacing: 0.05em;
-        line-height: 1.4;
-        border: 6px solid;
-    }
-
-    /* 青（進め） */
-    .result-blue {
-        background-color: #003399;
-        color: #FFFFFF;
-        border-color: #4488FF;
-    }
-
-    /* 赤（止まれ） */
-    .result-red {
-        background-color: #990000;
-        color: #FFFFFF;
-        border-color: #FF4444;
-    }
-
-    /* 黄（注意） */
-    .result-yellow {
-        background-color: #886600;
-        color: #FFFFFF;
-        border-color: #FFCC00;
-    }
-
-    /* 不明 */
-    .result-unknown {
-        background-color: #333333;
-        color: #AAAAAA;
-        border-color: #666666;
-    }
-
-    /* 情報メッセージ */
-    .stInfo {
-        font-size: 1.5rem !important;
-    }
-
-    /* 注意書き */
-    .stCaption {
-        font-size: 1.2rem !important;
-        color: #AAAAAA !important;
-        text-align: center;
-    }
-
-    /* カメラウィジェット */
-    .stCameraInput > div {
-        border: 4px dashed #555555;
-        border-radius: 16px;
-        padding: 10px;
-    }
-
-    /* 画像表示 */
-    .stImage img {
-        border-radius: 16px;
-        border: 4px solid #444444;
-    }
-
-    /* セパレーター */
-    hr {
-        border-color: #444444 !important;
-        margin: 2em 0 !important;
     }
     </style>
+    <script>
+    // 背面カメラ（environment）に切り替える
+    function switchToRearCamera() {
+        const videos = document.querySelectorAll('video');
+        videos.forEach(video => {
+            if (video.srcObject) return; // すでに設定済みならスキップ
+            navigator.mediaDevices.getUserMedia({
+                video: { facingMode: { exact: "environment" } }
+            }).then(stream => {
+                video.srcObject = stream;
+            }).catch(() => {
+                // 背面カメラが使えない場合はデフォルトにフォールバック
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(stream => { video.srcObject = stream; });
+            });
+        });
+    }
+    // DOM描画後に実行
+    setTimeout(switchToRearCamera, 800);
+    setTimeout(switchToRearCamera, 2000);
+    </script>
     """, unsafe_allow_html=True)
 
-st.title("🚦 信号機判別支援アプリ")
-st.write("YOLO11とOpenCVを使用して、カメラ画像から信号機の色を判定します。")
-st.write("📷 下のカメラボタンで信号機を撮影してください。")
+    camera_img = st.camera_input("📷 信号機を撮影してください", label_visibility="visible")
 
-# モデルの読み込み（Streamlit Cloud用に軽量なnモデルを使用）
-@st.cache_resource
-def load_model():
-    return YOLO("yolo11n.pt")
+    if camera_img:
+        file_bytes = np.asarray(bytearray(camera_img.read()), dtype=np.uint8)
+        img_bgr    = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-model = load_model()
+        with st.spinner("🔍 検出中…"):
+            result = run_detection(img_bgr, model)
 
-def get_color_name(img_bgr):
-    """HSV空間を利用した日本の信号機の色判定"""
-    if img_bgr is None or img_bgr.size == 0:
-        return "判定不能"
+        color = result["color"]
+        ja_label, emoji, css_cls, voice_msg = color_to_japanese(color)
 
-    hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-
-    # 日本の信号機特性に合わせたHSV範囲設定
-    color_ranges = {
-        "青色（進めます）": [((35, 70, 50), (95, 255, 255))],
-        "黄色（注意）":     [((15, 70, 50), (35, 255, 255))],
-        "赤色（止まれ）":   [((0, 70, 50), (10, 255, 255)), ((170, 70, 50), (180, 255, 255))]
-    }
-
-    counts = {}
-    for color_name, ranges in color_ranges.items():
-        mask = None
-        for (lower, upper) in ranges:
-            m = cv2.inRange(hsv, np.array(lower), np.array(upper))
-            mask = m if mask is None else cv2.bitwise_or(mask, m)
-        counts[color_name] = cv2.countNonZero(mask)
-
-    max_color = max(counts, key=counts.get)
-    if counts[max_color] < 50:
-        return "判定不能"
-    return max_color
-
-# --- メイン機能 ---
-img_file = st.camera_input("📸 信号機を撮影してください")
-
-if img_file:
-    image = Image.open(img_file)
-    frame_rgb = np.array(image)
-    frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-
-    # YOLO11で物体検出 (class 9 = traffic light)
-    results = model.predict(frame_bgr, classes=[9], conf=0.3, verbose=False)
-
-    found = False
-    for r in results:
-        for box in r.boxes:
-            found = True
-            x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-            crop = frame_bgr[y1:y2, x1:x2]
-            color_res = get_color_name(crop)
-
-            # 大きく・わかりやすく結果を表示
-            if "青色" in color_res:
-                st.markdown(f"""
-                    <div class="result-box result-blue">
-                        ✅ 進めます<br>
-                        <span style="font-size:1.6rem">（青信号）</span>
-                    </div>
-                """, unsafe_allow_html=True)
-                speak("青信号です。進めます。")
-            elif "赤色" in color_res:
-                st.markdown(f"""
-                    <div class="result-box result-red">
-                        🛑 止まれ<br>
-                        <span style="font-size:1.6rem">（赤信号）</span>
-                    </div>
-                """, unsafe_allow_html=True)
-                speak("赤信号です。止まってください。")
-            elif "黄色" in color_res:
-                st.markdown(f"""
-                    <div class="result-box result-yellow">
-                        ⚠️ 注意してください<br>
-                        <span style="font-size:1.6rem">（黄信号）</span>
-                    </div>
-                """, unsafe_allow_html=True)
-                speak("黄信号です。注意してください。")
-            else:
-                st.markdown(f"""
-                    <div class="result-box result-unknown">
-                        ❓ 判定できませんでした<br>
-                        <span style="font-size:1.6rem">もう一度撮影してください</span>
-                    </div>
-                """, unsafe_allow_html=True)
-                speak("判定できませんでした。もう一度撮影してください。")
-
-            # バウンディングボックスと結果テキストを描画
-            cv2.rectangle(frame_rgb, (x1, y1), (x2, y2), (0, 255, 0), 4)
-            cv2.putText(frame_rgb, color_res, (x1, y1 - 12),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-
-    if not found:
-        st.markdown("""
-            <div class="result-box result-unknown">
-                🔍 信号機が見つかりませんでした<br>
-                <span style="font-size:1.6rem">正面から大きく写してください</span>
-            </div>
+        st.markdown(f"""
+        <div class="signal-box {css_cls}">
+            {emoji}
+            <div class="label-{color if color in ['red','yellow','green'] else 'none'}">{ja_label}</div>
+        </div>
         """, unsafe_allow_html=True)
-        speak("信号機が見つかりませんでした。正面から大きく写してください。")
 
-    st.image(frame_rgb, caption="解析プレビュー", use_container_width=True)
+        st.components.v1.html(tts_html(voice_msg), height=0)
 
-st.divider()
-st.caption("⚠️ 本アプリは補助的なツールです。必ず周囲の音・誘導鈴・歩行者用信号の音を確認して安全を確保してください。")
+        if result["confidence_yolo"] > 0:
+            yc = int(result["confidence_yolo"] * 100)
+            st.markdown(f"""
+            <div class="conf-bar-wrap">
+                <div class="conf-label">検出信頼度: {yc}%</div>
+                <div class="conf-bar">
+                    <div class="conf-fill" style="width:{yc}%;background:#00E676"></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with st.expander("🖼️ 検出結果画像を表示"):
+            annotated_rgb = cv2.cvtColor(result["annotated"], cv2.COLOR_BGR2RGB)
+            st.image(annotated_rgb, use_container_width=True)
+
+# ── タブ3: 使い方 ──────────────────────────────────────
+with tab3:
+    st.markdown("""
+    <div class="info-card">
+        <strong>📱 使い方</strong><br><br>
+        1. <strong>画像アップロード</strong> タブから信号機の写真をアップロード<br>
+        2. または <strong>カメラ撮影</strong> タブでその場で撮影<br>
+        3. 自動で信号機を検出・色を判別し、<strong>音声で読み上げ</strong>ます<br><br>
+        🔴 赤信号 → 「赤信号です。止まってください。」<br>
+        🟡 黄信号 → 「黄信号です。注意してください。」<br>
+        🟢 青信号 → 「青信号です。渡れます。」
+    </div>
+
+    <div class="info-card" style="margin-top:0.8rem">
+        <strong>⚙️ 技術構成</strong><br><br>
+        • <strong>物体検出</strong>: YOLOv11 (Ultralytics)<br>
+        • <strong>色判別</strong>: OpenCV (HSV色空間解析)<br>
+        • <strong>音声</strong>: Web Speech API (ブラウザ内蔵)<br>
+        • <strong>UI</strong>: Streamlit
+    </div>
+
+    <div class="info-card" style="margin-top:0.8rem">
+        <strong>📦 カスタムモデルの使用方法</strong><br><br>
+        独自学習した <code>yolo11_traffic.pt</code> を<br>
+        <code>models/</code> フォルダに配置してください。<br><br>
+        推奨データセット:<br>
+        • <a href="https://universe.roboflow.com/search?q=traffic+light" style="color:#00E676">Roboflow Universe — Traffic Light</a>
+    </div>
+    """, unsafe_allow_html=True)
+
+# フッター
+st.markdown("""
+<hr style="border-color:#2A2A3A;margin-top:2rem">
+<div style="text-align:center;color:#6B6B85;font-size:0.8rem;padding-bottom:1rem">
+    視覚障害者支援ツール | Built with YOLOv11 + OpenCV + Streamlit
+</div>
+""", unsafe_allow_html=True)
 
