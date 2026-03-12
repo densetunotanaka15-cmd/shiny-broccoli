@@ -425,7 +425,6 @@ with tab2:
     # st.camera_input を大きく見せるCSS（機能はそのまま使う）
     st.markdown("""
     <style>
-    /* カメラ映像エリアを大きく */
     section[data-testid="stMain"] [data-testid="stCameraInput"] {
         width: 100% !important;
     }
@@ -433,16 +432,26 @@ with tab2:
         width: 100% !important;
         aspect-ratio: 4/3 !important;
         max-height: 65vh !important;
+        overflow: hidden !important;
+        border-radius: 14px !important;
+        border: 2px solid #2A2A3A !important;
+        background: #000 !important;
     }
     section[data-testid="stMain"] [data-testid="stCameraInput"] video {
         width: 100% !important;
         height: 100% !important;
         max-height: 65vh !important;
         object-fit: cover !important;
-        border-radius: 14px !important;
-        border: 2px solid #2A2A3A !important;
+        border-radius: 0 !important;
+        border: none !important;
     }
-    /* 撮影ボタンを大きく */
+    section[data-testid="stMain"] [data-testid="stCameraInput"] img {
+        width: 100% !important;
+        height: 65vh !important;
+        object-fit: cover !important;
+        border-radius: 0 !important;
+        display: block !important;
+    }
     section[data-testid="stMain"] [data-testid="stCameraInput"] button {
         width: 100% !important;
         padding: 16px !important;
@@ -569,4 +578,3 @@ st.markdown("""
     視覚障害者支援ツール | Built with YOLOv11 + OpenCV + Streamlit
 </div>
 """, unsafe_allow_html=True)
-
